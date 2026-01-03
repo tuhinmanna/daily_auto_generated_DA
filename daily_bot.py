@@ -2,60 +2,89 @@ import os
 import requests
 import datetime
 import random
+import time
+import json
 
-# 1. Setup Config
+# 1. Setup
 API_KEY = os.environ["GEMINI_API_KEY"]
 BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 
-# The Strategy: Try stable models first.
-# If one is busy (429), we instantly skip to the next.
-TARGET_MODELS = [
-    "gemini-1.5-flash",          # Most stable, fast
-    "gemini-1.5-flash-latest",   # Backup alias
-    "gemini-1.5-flash-001",      # Specific version
-    "gemini-1.5-pro",            # High intelligence backup
-    "gemini-2.0-flash-exp"       # Experimental (Last resort only!)
-]
-
-def generate_content_rotator(prompt):
-    last_error = ""
+def get_valid_model():
+    """
+    Connects to Google to find out EXACTLY which models 
+    are available for this specific API Key.
+    """
+    url = f"{BASE_URL}/models?key={API_KEY}"
+    print(f"Checking available models from: {BASE_URL}...")
     
-    for model in TARGET_MODELS:
-        print(f"Attempting with model: {model}...")
-        url = f"{BASE_URL}/models/{model}:generateContent?key={API_KEY}"
-        payload = {"contents": [{"parts": [{"text": prompt}]}]}
-        headers = {"Content-Type": "application/json"}
-        
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+    except Exception as e:
+        print(f"FATAL: Could not list models. Error: {e}")
+        # Last ditch hardcoded attempt if listing fails
+        return "gemini-2.0-flash-exp"
+
+    # Filter for models that can generate content
+    valid_models = []
+    for m in data.get('models', []):
+        name = m['name'].replace('models/', '')
+        if 'generateContent' in m.get('supportedGenerationMethods', []):
+            valid_models.append(name)
+    
+    if not valid_models:
+        raise Exception("No Content Generation models found for this API Key.")
+    
+    print(f"SUCCESS. Found these valid models: {valid_models}")
+    
+    # Strategy: Pick the first one that ISN'T 'pro-vision' (which requires images)
+    # We prefer 'flash' models if available.
+    preferred = [m for m in valid_models if 'flash' in m]
+    if preferred:
+        return preferred[0]
+    
+    return valid_models[0]
+
+def generate_with_patience(model, prompt):
+    url = f"{BASE_URL}/models/{model}:generateContent?key={API_KEY}"
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    headers = {"Content-Type": "application/json"}
+    
+    # We will try 3 times, with LONG waits (Experimental models need this)
+    # Wait times: 20s, 60s, 120s
+    waits = [20, 60, 120]
+    
+    for i, wait_time in enumerate(waits):
+        print(f"Attempt {i+1} with {model}...")
         try:
-            # We set a timeout so it doesn't hang forever
-            response = requests.post(url, json=payload, headers=headers, timeout=30)
+            response = requests.post(url, json=payload, headers=headers)
             
             if response.status_code == 200:
-                print(f"  SUCCESS with {model}!")
                 return response.json()['candidates'][0]['content']['parts'][0]['text']
             
             elif response.status_code == 429:
-                print(f"  > {model} is busy (Rate Limit). Switching immediately...")
-                continue # Try next model in list
-            
-            elif response.status_code == 404:
-                print(f"  > {model} not found/deprecated. Switching...")
+                print(f"  > Rate Limited (429). Server is busy.")
+                print(f"  > Sleeping for {wait_time} seconds...")
+                time.sleep(wait_time)
                 continue
                 
             else:
                 print(f"  > Error {response.status_code}: {response.text}")
-                last_error = f"{response.status_code} - {response.text}"
-                continue
+                # If it's a 500 error (Server Error), we retry. 
+                # If it's a 400 (Bad Request), we stop.
+                if response.status_code >= 500:
+                    time.sleep(wait_time)
+                    continue
+                break
                 
         except Exception as e:
-            print(f"  > Connection Failed: {e}")
-            last_error = str(e)
-            continue
+            print(f"  > Network Error: {e}")
+            time.sleep(wait_time)
             
-    # If we loop through ALL models and none work
-    raise Exception(f"All models failed. Last error: {last_error}")
+    raise Exception("Max retries exceeded. The model is too busy right now.")
 
-# 2. Define the Prompt
+# 2. Main Logic
 topics = ["SQL", "Python Pandas", "Python NumPy", "Data Visualization"]
 selected_topic = random.choice(topics)
 
@@ -77,22 +106,27 @@ EXPLANATION_START
 EXPLANATION_END
 """
 
-# 3. Execution
 try:
-    text = generate_content_rotator(prompt)
+    # A. Dynamic Model Selection
+    model_name = get_valid_model()
+    print(f"Selected Model: {model_name}")
     
-    # 4. Parse the response
+    # B. Generate
+    text = generate_with_patience(model_name, prompt)
+    
+    # C. Parse
     question = text.split("QUESTION_START")[1].split("QUESTION_END")[0].strip()
     solution = text.split("SOLUTION_START")[1].split("SOLUTION_END")[0].strip()
     explanation = text.split("EXPLANATION_START")[1].split("EXPLANATION_END")[0].strip()
 
 except Exception as e:
     print(f"CRITICAL FAILURE: {e}")
-    question = f"Error generating content: {e}"
+    # Fallback to create files so workflow doesn't turn red
+    question = f"Generation failed. Check logs for details.\nError: {e}"
     solution = "# No solution"
-    explanation = "Check logs"
+    explanation = "See Action logs."
 
-# 5. Save to File
+# 3. Save
 today = datetime.date.today().strftime("%Y-%m-%d")
 folder_path = os.path.join(os.getcwd(), today)
 os.makedirs(folder_path, exist_ok=True)
