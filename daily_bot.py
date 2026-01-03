@@ -85,7 +85,7 @@ def generate_with_patience(model, prompt):
     raise Exception("Max retries exceeded. The model is too busy right now.")
 
 # 2. Main Logic
-topics = ["SQL", "Python Pandas", "Python NumPy", "Data Visualization"]
+topics = ["SQL", "Python", "Interview Data Analytics Question"]
 selected_topic = random.choice(topics)
 
 prompt = f"""
