@@ -2,11 +2,55 @@ import os
 import requests
 import datetime
 import random
+import time
 
 # 1. Setup Config
 API_KEY = os.environ["GEMINI_API_KEY"]
-# We use the REST API directly to avoid library conflicts
-API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={API_KEY}"
+
+# List of models to try (in order of preference)
+# Since it is 2026, we prioritize 2.0, but keep 1.5 as fallback
+MODELS_TO_TRY = [
+    "gemini-2.0-flash-exp",
+    "gemini-1.5-flash",
+    "gemini-1.5-flash-latest",
+    "gemini-pro"
+]
+
+def generate_content_with_retry(prompt):
+    """Tries multiple models until one works"""
+    last_error = ""
+    
+    for model in MODELS_TO_TRY:
+        print(f"Trying model: {model}...")
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={API_KEY}"
+        
+        payload = {
+            "contents": [{
+                "parts": [{"text": prompt}]
+            }]
+        }
+        headers = {"Content-Type": "application/json"}
+        
+        try:
+            response = requests.post(url, json=payload, headers=headers)
+            response.raise_for_status() # Raises error for 404/500
+            
+            # If successful, return the text
+            data = response.json()
+            return data['candidates'][0]['content']['parts'][0]['text']
+            
+        except Exception as e:
+            print(f"Failed with {model}: {e}")
+            last_error = str(e)
+            if response.status_code == 404:
+                continue # Try next model
+            else:
+                # If it's a permission/quota error (403/429), waiting might help, 
+                # but for now we just try the next model.
+                continue
+                
+    # If all models fail
+    raise Exception(f"All models failed. Last error: {last_error}")
 
 # 2. Define the Prompt
 topics = ["SQL", "Python Pandas", "Python NumPy", "Data Visualization"]
@@ -30,35 +74,21 @@ EXPLANATION_START
 EXPLANATION_END
 """
 
-# 3. Call the API (The "Universal" Method)
-payload = {
-    "contents": [{
-        "parts": [{"text": prompt}]
-    }]
-}
-headers = {"Content-Type": "application/json"}
-
+# 3. Execution
 try:
-    response = requests.post(API_URL, json=payload, headers=headers)
-    response.raise_for_status() # Check for HTTP errors
-    data = response.json()
+    text = generate_content_with_retry(prompt)
     
-    # Extract text from the complex JSON response
-    text = data['candidates'][0]['content']['parts'][0]['text']
-
     # 4. Parse the response
     question = text.split("QUESTION_START")[1].split("QUESTION_END")[0].strip()
     solution = text.split("SOLUTION_START")[1].split("SOLUTION_END")[0].strip()
     explanation = text.split("EXPLANATION_START")[1].split("EXPLANATION_END")[0].strip()
 
 except Exception as e:
-    # Fallback if something fails
-    print(f"Error: {e}")
-    if 'response' in locals():
-        print(response.text)
-    question = "Could not generate content today."
-    solution = "N/A"
-    explanation = "Check Action logs for error details."
+    print(f"CRITICAL ERROR: {e}")
+    # Fallback content so the file is still created (helpful for debugging)
+    question = f"Bot failed to generate content today.\nError details: {e}"
+    solution = "# No solution available"
+    explanation = "Check GitHub Actions logs."
 
 # 5. Create the Folder
 today = datetime.date.today().strftime("%Y-%m-%d")
