@@ -6,63 +6,66 @@ import time
 
 # 1. Setup Config
 API_KEY = os.environ["GEMINI_API_KEY"]
+BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 
-# Updated Model List for 2026 Stability
-# We try the newest first, but fall back to older stable ones
-MODELS_TO_TRY = [
-    "gemini-2.0-flash-exp",
-    "gemini-1.5-flash",
-    "gemini-1.5-flash-latest",
-    "gemini-1.5-pro"
-]
+def get_available_model():
+    """Ask Google which models are actually available for this key."""
+    url = f"{BASE_URL}/models?key={API_KEY}"
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+        
+        # Look for models that support 'generateContent'
+        # We prefer 'flash' models because they are faster and have higher limits
+        available_models = [
+            m['name'].replace('models/', '') 
+            for m in data.get('models', []) 
+            if 'generateContent' in m.get('supportedGenerationMethods', [])
+        ]
+        
+        if not available_models:
+            raise Exception("No models found that support content generation.")
+            
+        # Prioritize 1.5 Flash (most stable) or 2.0
+        priority_order = ['gemini-1.5-flash', 'gemini-1.5-flash-001', 'gemini-2.0-flash-exp', 'gemini-pro']
+        
+        for priority in priority_order:
+            if priority in available_models:
+                print(f"Auto-selected model: {priority}")
+                return priority
+                
+        # Fallback: Just take the first one found
+        fallback = available_models[0]
+        print(f"Auto-selected fallback model: {fallback}")
+        return fallback
 
-def generate_content_safe(prompt):
-    """Tries multiple models with rate-limit handling"""
-    last_error = ""
+    except Exception as e:
+        print(f"Error listing models: {e}")
+        # Absolute last resort hardcode
+        return "gemini-1.5-flash"
+
+def generate_content(model, prompt):
+    url = f"{BASE_URL}/models/{model}:generateContent?key={API_KEY}"
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    headers = {"Content-Type": "application/json"}
     
-    for model in MODELS_TO_TRY:
-        print(f"Trying model: {model}...")
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={API_KEY}"
+    # Retry logic for 429 (Rate Limit) errors
+    for attempt in range(5): # Try 5 times
+        response = requests.post(url, json=payload, headers=headers)
         
-        payload = {
-            "contents": [{
-                "parts": [{"text": prompt}]
-            }]
-        }
-        headers = {"Content-Type": "application/json"}
-        
-        # Try up to 3 times per model (to handle 429 rate limits)
-        for attempt in range(3):
-            try:
-                response = requests.post(url, json=payload, headers=headers)
-                
-                if response.status_code == 200:
-                    # Success!
-                    data = response.json()
-                    return data['candidates'][0]['content']['parts'][0]['text']
-                
-                elif response.status_code == 429:
-                    # Rate Limited - Wait and retry
-                    wait_time = (attempt + 1) * 10 # Wait 10s, then 20s...
-                    print(f"  Hit rate limit (429). Sleeping for {wait_time}s...")
-                    time.sleep(wait_time)
-                    continue
-                    
-                else:
-                    # Other error (like 404), move to next model
-                    print(f"  Failed with status {response.status_code}: {response.text}")
-                    last_error = f"{response.status_code} - {response.text}"
-                    break # Break inner loop, try next model
-                    
-            except Exception as e:
-                print(f"  Connection error: {e}")
-                last_error = str(e)
-                break
-                
-    # If we get here, every single model failed
-    raise Exception(f"All models exhausted. Last error: {last_error}")
+        if response.status_code == 200:
+            return response.json()['candidates'][0]['content']['parts'][0]['text']
+        elif response.status_code == 429:
+            wait = (attempt + 1) * 15 # Wait 15s, 30s, 45s...
+            print(f"  Rate limited (429). Waiting {wait}s...")
+            time.sleep(wait)
+        else:
+            raise Exception(f"API Error {response.status_code}: {response.text}")
+            
+    raise Exception("Max retries exceeded.")
 
-# 2. Define the Prompt
+# 2. Main Logic
 topics = ["SQL", "Python Pandas", "Python NumPy", "Data Visualization"]
 selected_topic = random.choice(topics)
 
@@ -84,28 +87,30 @@ EXPLANATION_START
 EXPLANATION_END
 """
 
-# 3. Execution
 try:
-    text = generate_content_safe(prompt)
+    # A. Find a model
+    model_name = get_available_model()
     
-    # 4. Parse the response
+    # B. Generate Content
+    text = generate_content(model_name, prompt)
+    
+    # C. Parse
     question = text.split("QUESTION_START")[1].split("QUESTION_END")[0].strip()
     solution = text.split("SOLUTION_START")[1].split("SOLUTION_END")[0].strip()
     explanation = text.split("EXPLANATION_START")[1].split("EXPLANATION_END")[0].strip()
 
 except Exception as e:
-    print(f"CRITICAL ERROR: {e}")
-    # Fallback content to ensure file creation
-    question = f"Bot failed to generate content today. Check logs."
-    solution = "# No solution available"
-    explanation = str(e)
+    print(f"CRITICAL FAILURE: {e}")
+    # Create valid files even if it fails, so we can see the error in the repo
+    question = f"Error generating content: {e}"
+    solution = "# No solution"
+    explanation = "Check logs"
 
-# 5. Create the Folder
+# 3. Save to File
 today = datetime.date.today().strftime("%Y-%m-%d")
 folder_path = os.path.join(os.getcwd(), today)
 os.makedirs(folder_path, exist_ok=True)
 
-# 6. Write the Files
 with open(f"{folder_path}/problem.md", "w") as f:
     f.write(f"# Daily {selected_topic} Challenge - {today}\n\n")
     f.write(f"## Question\n{question}\n\n")
@@ -115,4 +120,4 @@ ext = "sql" if "SQL" in selected_topic else "py"
 with open(f"{folder_path}/solution.{ext}", "w") as f:
     f.write(solution)
 
-print(f"Successfully created content for {today}")
+print(f"Job finished for {today}")
