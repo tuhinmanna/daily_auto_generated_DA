@@ -1,7 +1,7 @@
-# Daily Data Visualization Challenge - 2026-01-03
+# Daily SQL Challenge - 2026-01-03
 
 ## Question
-Error generating content: Max retries exceeded.
+Error generating content: All models failed. Last error: 
 
 ## Explanation
 Check logs
