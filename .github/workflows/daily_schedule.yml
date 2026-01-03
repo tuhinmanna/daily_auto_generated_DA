@@ -1,0 +1,41 @@
+name: Daily Data Problem Bot
+
+on:
+  schedule:
+    # Runs at 13:00 UTC everyday (Adjust as needed)
+    - cron: '00 13 * * *'
+  # Allows you to run it manually from the Actions tab for testing
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install google-generativeai
+
+      - name: Run generation script
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python daily_bot.py
+
+      - name: Commit and Push changes
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "Automated: Added new daily problem"
+          git push
