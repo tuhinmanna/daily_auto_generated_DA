@@ -16,8 +16,7 @@ def get_available_model():
         response.raise_for_status()
         data = response.json()
         
-        # Look for models that support 'generateContent'
-        # We prefer 'flash' models because they are faster and have higher limits
+        # Get all model names available to you
         available_models = [
             m['name'].replace('models/', '') 
             for m in data.get('models', []) 
@@ -27,22 +26,28 @@ def get_available_model():
         if not available_models:
             raise Exception("No models found that support content generation.")
             
-        # Prioritize 1.5 Flash (most stable) or 2.0
-        priority_order = ['gemini-1.5-flash', 'gemini-1.5-flash-001', 'gemini-2.0-flash-exp', 'gemini-pro']
+        # FIXED PRIORITY: Stable models first!
+        priority_order = [
+            'gemini-1.5-flash', 
+            'gemini-1.5-flash-001', 
+            'gemini-1.5-flash-002',
+            'gemini-1.5-flash-8b',
+            'gemini-pro',
+            'gemini-1.0-pro',
+            'gemini-2.0-flash-exp' # Last resort
+        ]
         
         for priority in priority_order:
             if priority in available_models:
                 print(f"Auto-selected model: {priority}")
                 return priority
                 
-        # Fallback: Just take the first one found
-        fallback = available_models[0]
-        print(f"Auto-selected fallback model: {fallback}")
-        return fallback
+        # Fallback
+        print(f"Auto-selected fallback model: {available_models[0]}")
+        return available_models[0]
 
     except Exception as e:
         print(f"Error listing models: {e}")
-        # Absolute last resort hardcode
         return "gemini-1.5-flash"
 
 def generate_content(model, prompt):
@@ -50,18 +55,22 @@ def generate_content(model, prompt):
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
     headers = {"Content-Type": "application/json"}
     
-    # Retry logic for 429 (Rate Limit) errors
-    for attempt in range(5): # Try 5 times
+    # Retry logic
+    for attempt in range(5):
         response = requests.post(url, json=payload, headers=headers)
         
         if response.status_code == 200:
             return response.json()['candidates'][0]['content']['parts'][0]['text']
         elif response.status_code == 429:
-            wait = (attempt + 1) * 15 # Wait 15s, 30s, 45s...
-            print(f"  Rate limited (429). Waiting {wait}s...")
+            wait = (attempt + 1) * 10 
+            print(f"  Rate limited (429) on {model}. Waiting {wait}s...")
             time.sleep(wait)
         else:
-            raise Exception(f"API Error {response.status_code}: {response.text}")
+            print(f"  Error {response.status_code}: {response.text}")
+            # If 404, we shouldn't retry, just fail
+            if response.status_code == 404:
+                raise Exception("Model not found (404)")
+            time.sleep(5)
             
     raise Exception("Max retries exceeded.")
 
@@ -88,20 +97,15 @@ EXPLANATION_END
 """
 
 try:
-    # A. Find a model
     model_name = get_available_model()
-    
-    # B. Generate Content
     text = generate_content(model_name, prompt)
     
-    # C. Parse
     question = text.split("QUESTION_START")[1].split("QUESTION_END")[0].strip()
     solution = text.split("SOLUTION_START")[1].split("SOLUTION_END")[0].strip()
     explanation = text.split("EXPLANATION_START")[1].split("EXPLANATION_END")[0].strip()
 
 except Exception as e:
     print(f"CRITICAL FAILURE: {e}")
-    # Create valid files even if it fails, so we can see the error in the repo
     question = f"Error generating content: {e}"
     solution = "# No solution"
     explanation = "Check logs"
