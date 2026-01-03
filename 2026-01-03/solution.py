@@ -1,1 +1,1 @@
-# No solution available
+# No solution
