@@ -1,8 +1,13 @@
-# Daily Data Visualization Challenge - 2026-01-03
+# Daily SQL Challenge - 2026-01-03
 
 ## Question
-Bot failed to generate content today.
-Error details: All models failed. Last error: 404 Client Error: Not Found for url: https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=AIzaSyBhz5at61yeIT4gJ-cWBdcKC6g_74pSQ5U
+Bot failed to generate content today. Check logs.
 
 ## Explanation
-Check GitHub Actions logs.
+All models exhausted. Last error: 404 - {
+  "error": {
+    "code": 404,
+    "message": "models/gemini-1.5-pro is not found for API version v1beta, or is not supported for generateContent. Call ListModels to see the list of available models and their supported methods.",
+    "status": "NOT_FOUND"
+  }
+}
