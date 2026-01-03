@@ -1,41 +1,35 @@
-# Daily Interview Data Analytics Question Challenge - 2026-01-03
+# Daily SQL Challenge - 2026-01-03
 
 ## Question
-You are a senior data analyst supporting the recruiting team. They want to deeply understand the efficiency of their hiring funnel. You've been provided with a table, `candidate_funnel`, which tracks candidates' ultimate outcomes for each stage of the interview process. Each row represents a unique candidate, and the status columns indicate whether they passed, were rejected, or never reached a particular stage.
+You are given a table `transactions` that records customer purchases. Each row represents a single transaction.
 
-Your task is to:
-1.  Calculate the total number of candidates who *entered* each sequential interview stage.
-2.  Determine the conversion rate between each consecutive stage (e.g., Application to Screening, Screening to Technical, etc.).
-3.  Identify the stage with the highest drop-off percentage (which is `1 - conversion_rate`).
+**Table Schema:**
+`transactions`
+*   `transaction_id` (INT, PRIMARY KEY)
+*   `customer_id` (INT)
+*   `transaction_date` (DATE)
+*   `amount` (DECIMAL(10, 2))
 
-Assume the standard interview stages are strictly sequential: `Application` -> `Screening` -> `Technical` -> `Onsite` -> `Offer`. A candidate is considered to have "entered" a stage if they passed the previous one. For the `Application` stage, all candidates in the table are considered to have "entered" it. For the `Offer` stage, `offer_status` = 'Accepted' means they converted (were hired), otherwise they dropped off (offer rejected/declined).
+Your task is to write a SQL query that returns all original transaction columns along with two additional calculated columns:
 
-Table Schema:
-`candidate_funnel`
-- `candidate_id` (INT): Unique identifier for each candidate.
-- `application_status` (VARCHAR): 'Passed' or 'Rejected'.
-- `screening_status` (VARCHAR): 'Passed', 'Rejected', or 'N/A' (if rejected before this stage).
-- `technical_status` (VARCHAR): 'Passed', 'Rejected', or 'N/A'.
-- `onsite_status` (VARCHAR): 'Passed', 'Rejected', or 'N/A'.
-- `offer_status` (VARCHAR): 'Accepted', 'Rejected', or 'N/A'.
+1.  `days_since_previous_purchase`: The number of days between the current transaction's `transaction_date` and the customer's *immediately preceding* transaction's `transaction_date`. For a customer's very first purchase, this value should be `NULL`.
+2.  `is_first_purchase`: A boolean indicator (e.g., 1 for true, 0 for false) that specifies if the current transaction is the customer's *first ever* purchase.
+
+The final result set should be ordered by `customer_id` and then `transaction_date`.
 
 ## Explanation
-This solution calculates the funnel conversion rates and drop-off percentages between sequential interview stages.
+This solution uses the `LAG()` window function to efficiently calculate the `days_since_previous_purchase` and `is_first_purchase` for each customer's transactions.
 
-1.  **`funnel_counts` CTE**: This Common Table Expression (CTE) is the core of the solution. It aggregates all necessary counts from the `candidate_funnel` table in a single pass.
-    *   `total_applications`: Simply counts all unique candidates, representing those who 'entered' the Application stage.
-    *   `passed_application`: Counts candidates who passed the Application stage, which implies they 'entered' the Screening stage. This is determined by `application_status = 'Passed'`.
-    *   `passed_screening`: Counts candidates who passed both Application and Screening stages, implying they 'entered' the Technical stage.
-    *   `passed_technical`: Counts candidates who passed Application, Screening, and Technical stages, implying they 'entered' the Onsite stage.
-    *   `passed_onsite`: Counts candidates who passed Application, Screening, Technical, and Onsite stages, implying they 'entered' the Offer stage.
-    *   `accepted_offer`: Counts candidates who ultimately accepted an offer, representing the final successful conversion (hired).
+1.  **`LAG(transaction_date) OVER (PARTITION BY customer_id ORDER BY transaction_date)`**: This is the core of the solution.
+    *   `PARTITION BY customer_id`: Divides the dataset into separate groups for each customer.
+    *   `ORDER BY transaction_date`: Sorts the transactions within each customer's group chronologically.
+    *   `LAG(transaction_date)`: For each row, it retrieves the `transaction_date` from the *previous* row within its respective `customer_id` partition, based on the `transaction_date` order. For the first transaction of any customer, `LAG()` will return `NULL`.
 
-2.  **`UNION ALL` Structure**: The results from the `funnel_counts` CTE are then used to construct the final output table, with one row per stage. `UNION ALL` combines these separate queries.
-    *   For each stage (`Application`, `Screening`, `Technical`, `Onsite`, `Offer`), a `SELECT` statement pulls the relevant `candidates_entered` (from the previous stage's 'passed' count), `candidates_passed_to_next_stage`, `conversion_rate`, and `drop_off_rate`.
-    *   `conversion_rate` is calculated by dividing `candidates_passed_to_next_stage` by `candidates_entered`. `CAST(... AS DECIMAL)` ensures floating-point division for accurate rates. `ROUND(..., 4)` formats the rate to four decimal places.
-    *   `drop_off_rate` is simply `1 - conversion_rate`.
-    *   `CASE WHEN ... THEN ... ELSE 0 END` (or `ELSE 1 END` for drop-off) statements are used to handle potential division by zero (e.g., if no candidates reached a particular stage), ensuring the query doesn't error out.
+2.  **`days_since_previous_purchase`**:
+    *   `DATEDIFF(transaction_date, LAG(...) )`: We calculate the difference in days between the current `transaction_date` and the `previous_transaction_date` obtained from `LAG()`. The `DATEDIFF` function's exact syntax can vary (e.g., MySQL uses `DATEDIFF(end_date, start_date)`, PostgreSQL uses `end_date - start_date`, SQL Server uses `DATEDIFF(day, start_date, end_date)`). The provided solution assumes a common `DATEDIFF(end_date, start_date)` format.
+    *   When `LAG()` returns `NULL` (for the first purchase), `DATEDIFF` will also return `NULL`, correctly handling the requirement for the first purchase.
 
-3.  **Ordering**: The final `ORDER BY` clause ensures the stages are displayed in their logical sequential order (Application to Offer).
+3.  **`is_first_purchase`**:
+    *   `CASE WHEN LAG(...) IS NULL THEN 1 ELSE 0 END`: This `CASE` statement leverages the behavior of `LAG()`. If `LAG(transaction_date)` returns `NULL`, it means there was no preceding transaction for that customer, indicating it's their first purchase. In this scenario, `is_first_purchase` is set to `1`; otherwise, it's `0`.
 
-To identify the stage with the highest drop-off rate, one would examine the `drop_off_rate` column in the final result set and find the maximum value, then identify its corresponding `stage_name`.
+Finally, the results are ordered by `customer_id` and `transaction_date` as requested.
