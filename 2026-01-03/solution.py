@@ -1,1 +1,1 @@
-N/A
+# No solution available
